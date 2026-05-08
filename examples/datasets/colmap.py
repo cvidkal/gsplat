@@ -81,12 +81,19 @@ class Parser:
         normalize: bool = False,
         test_every: int = 8,
         load_exposure: bool = False,
+        frame_mask_dir: Optional[str] = None,
     ):
+        # frame_mask_dir is an optional flat directory containing per-image
+        # masks named to match the COLMAP image filenames (stem-based, .png).
+        # Mask convention (matches our preprocessing pipeline):
+        #   0   = pixel is reliable, USE in photometric loss
+        #   255 = pixel was flagged (overexposure/specular/hand), SKIP
         self.data_dir = data_dir
         self.factor = factor
         self.normalize = normalize
         self.test_every = test_every
         self.load_exposure = load_exposure
+        self.frame_mask_dir = frame_mask_dir
 
         colmap_dir = os.path.join(data_dir, "sparse/0/")
         if not os.path.exists(colmap_dir):
@@ -267,6 +274,34 @@ class Parser:
 
         self.image_names = image_names  # List[str], (num_images,)
         self.image_paths = image_paths  # List[str], (num_images,)
+
+        # Build per-frame mask paths, one per image (None if missing).
+        # Matched by image-name stem -> <frame_mask_dir>/<stem>.png.
+        self.frame_mask_paths: List[Optional[str]] = [None] * len(image_paths)
+        if frame_mask_dir is not None:
+            n_found = 0
+            for i, name in enumerate(image_names):
+                stem = os.path.splitext(name)[0]
+                # support both flat ('left_00001.png') and nested
+                # ('left/left_00001.png') layouts
+                candidates = [
+                    os.path.join(frame_mask_dir, f"{stem}.png"),
+                    os.path.join(frame_mask_dir, f"{os.path.basename(stem)}.png"),
+                ]
+                for cand in candidates:
+                    if os.path.exists(cand):
+                        self.frame_mask_paths[i] = cand
+                        n_found += 1
+                        break
+            print(
+                f"[Parser] frame_mask_dir={frame_mask_dir} -> "
+                f"{n_found}/{len(image_paths)} per-image masks resolved."
+            )
+            if n_found == 0:
+                raise FileNotFoundError(
+                    f"frame_mask_dir was provided but NO masks matched any image name. "
+                    f"Sample expected names: {image_names[:3]}"
+                )
         self.camtoworlds = camtoworlds  # np.ndarray, (num_images, 4, 4)
         self.camera_ids = camera_ids  # List[int], (num_images,)
         self.Ks_dict = Ks_dict  # Dict of camera_id -> K
@@ -433,6 +468,22 @@ class Dataset:
         camtoworlds = self.parser.camtoworlds[index]
         mask = self.parser.mask_dict[camera_id]
 
+        # Per-frame mask (overexposure/reflection/hand). Loaded once per
+        # __getitem__; resized NEAREST to current image size and combined
+        # via AND with the camera-level mask if any.
+        frame_mask_bool: Optional[np.ndarray] = None
+        fm_path = (
+            self.parser.frame_mask_paths[index]
+            if getattr(self.parser, "frame_mask_paths", None) is not None
+            else None
+        )
+        if fm_path is not None:
+            fm = imageio.imread(fm_path)
+            if fm.ndim == 3:
+                fm = fm[..., 0]
+            # Convention: 0=USE, 255=SKIP -> bool USE-mask
+            frame_mask_bool = (fm < 128)
+
         if len(params) > 0:
             # Images are distorted. Undistort them.
             mapx, mapy = (
@@ -451,6 +502,40 @@ class Dataset:
             image = image[y : y + self.patch_size, x : x + self.patch_size]
             K[0, 2] -= x
             K[1, 2] -= y
+            if frame_mask_bool is not None:
+                # Resize first, then crop to match the image patch.
+                if frame_mask_bool.shape != image.shape[:2]:
+                    frame_mask_bool = cv2.resize(
+                        frame_mask_bool.astype(np.uint8),
+                        (w, h),
+                        interpolation=cv2.INTER_NEAREST,
+                    ).astype(bool)
+                frame_mask_bool = frame_mask_bool[
+                    y : y + self.patch_size, x : x + self.patch_size
+                ]
+
+        # Resize per-frame mask to current image size if needed.
+        if frame_mask_bool is not None and frame_mask_bool.shape != image.shape[:2]:
+            frame_mask_bool = cv2.resize(
+                frame_mask_bool.astype(np.uint8),
+                (image.shape[1], image.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            ).astype(bool)
+
+        # Combine camera-level mask (if any) with per-frame mask via AND.
+        if frame_mask_bool is not None:
+            if mask is not None:
+                if mask.shape != frame_mask_bool.shape:
+                    mask_resized = cv2.resize(
+                        mask.astype(np.uint8),
+                        (frame_mask_bool.shape[1], frame_mask_bool.shape[0]),
+                        interpolation=cv2.INTER_NEAREST,
+                    ).astype(bool)
+                else:
+                    mask_resized = mask.astype(bool)
+                mask = mask_resized & frame_mask_bool
+            else:
+                mask = frame_mask_bool
 
         data = {
             "K": torch.from_numpy(K).float(),
