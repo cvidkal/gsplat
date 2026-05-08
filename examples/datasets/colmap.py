@@ -42,7 +42,9 @@ def _get_rel_paths(path_dir: str) -> List[str]:
 
 
 def _resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
-    """Resize image folder."""
+    """Resize image folder. Creates parent subdirectories under `resized_dir`
+    on the fly so nested layouts (e.g. images/left/, images/right/) work.
+    """
     print(f"Downscaling images by {factor}x from {image_dir} to {resized_dir}.")
     os.makedirs(resized_dir, exist_ok=True)
 
@@ -54,6 +56,8 @@ def _resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
         )
         if os.path.isfile(resized_path):
             continue
+        # Ensure subdirectory exists (handles nested 'left/', 'right/' etc.)
+        os.makedirs(os.path.dirname(resized_path), exist_ok=True)
         image = imageio.imread(image_path)[..., :3]
         resized_size = (
             int(round(image.shape[1] / factor)),
