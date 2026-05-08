@@ -59,6 +59,10 @@ class Config:
     result_dir: str = "results/garden"
     # Every N images there is a test image
     test_every: int = 8
+    # Optional flat directory of per-frame masks (filename matches image stem,
+    # e.g. left_00170.png). Convention: 0=USE in loss, 255=SKIP. Combined with
+    # camera-level mask via AND. Loaded by datasets/colmap.py Parser.
+    frame_mask_dir: Optional[str] = None
     # Random crop size for training  (experimental)
     patch_size: Optional[int] = None
     # A global scaler that applies to the scene size related parameters
@@ -336,6 +340,7 @@ class Runner:
             factor=cfg.data_factor,
             normalize=cfg.normalize_world_space,
             test_every=cfg.test_every,
+            frame_mask_dir=cfg.frame_mask_dir,
         )
         self.trainset = Dataset(
             self.parser,
