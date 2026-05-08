@@ -38,7 +38,12 @@ from datasets.traj import (
     generate_interpolated_path,
     generate_spiral_path,
 )
-from fused_ssim import fused_ssim
+try:
+    from fused_ssim import fused_ssim
+    _HAS_FUSED_SSIM = True
+except ImportError:  # pragma: no cover - falls back to torchmetrics SSIM
+    fused_ssim = None  # type: ignore[assignment]
+    _HAS_FUSED_SSIM = False
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
@@ -924,11 +929,20 @@ class Runner:
                 l1loss = F.l1_loss(colors, pixels)
                 colors_ssim = colors
                 pixels_ssim = pixels
-            ssimloss = 1.0 - fused_ssim(
-                colors_ssim.permute(0, 3, 1, 2),
-                pixels_ssim.permute(0, 3, 1, 2),
-                padding="valid",
-            )
+            if _HAS_FUSED_SSIM:
+                ssimloss = 1.0 - fused_ssim(
+                    colors_ssim.permute(0, 3, 1, 2),
+                    pixels_ssim.permute(0, 3, 1, 2),
+                    padding="valid",
+                )
+            else:
+                # Slower fallback: use torchmetrics SSIM. ~2-3x slower per
+                # iteration, but lets training run on machines without the
+                # CUDA toolkit needed to compile fused-ssim.
+                ssimloss = 1.0 - self.ssim(
+                    colors_ssim.permute(0, 3, 1, 2),
+                    pixels_ssim.permute(0, 3, 1, 2),
+                )
             loss = torch.lerp(l1loss, ssimloss, cfg.ssim_lambda)
             if cfg.depth_loss:
                 # query depths from depth map
