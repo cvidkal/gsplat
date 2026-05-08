@@ -62,11 +62,7 @@ class Parser:
         factor: int = 1,
         normalize: bool = False,
         test_every: int = 8,
-<<<<<<< HEAD
-=======
-        load_exposure: bool = False,
         frame_mask_dir: Optional[str] = None,
->>>>>>> faec343 (feat: per-frame mask loading via Parser.frame_mask_dir)
     ):
         # frame_mask_dir is an optional flat directory containing per-image
         # masks named to match the COLMAP image filenames (stem-based, .png).
@@ -77,11 +73,7 @@ class Parser:
         self.factor = factor
         self.normalize = normalize
         self.test_every = test_every
-<<<<<<< HEAD
-=======
-        self.load_exposure = load_exposure
         self.frame_mask_dir = frame_mask_dir
->>>>>>> faec343 (feat: per-frame mask loading via Parser.frame_mask_dir)
 
         colmap_dir = os.path.join(data_dir, "sparse/0/")
         if not os.path.exists(colmap_dir):

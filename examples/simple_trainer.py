@@ -21,7 +21,12 @@ from datasets.traj import (
     generate_interpolated_path,
     generate_spiral_path,
 )
-from fused_ssim import fused_ssim
+try:
+    from fused_ssim import fused_ssim
+    _HAS_FUSED_SSIM = True
+except ImportError:  # pragma: no cover - falls back to torchmetrics SSIM
+    fused_ssim = None  # type: ignore[assignment]
+    _HAS_FUSED_SSIM = False
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
@@ -685,10 +690,31 @@ class Runner:
             )
 
             # loss
-            l1loss = F.l1_loss(colors, pixels)
-            ssimloss = 1.0 - fused_ssim(
-                colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
-            )
+            if masks is not None:
+                # Exclude masked pixels from L1; zero both sides at masked
+                # pixels for SSIM so masked patches don't pull colors toward
+                # an arbitrary value.
+                l1loss = F.l1_loss(colors[masks], pixels[masks])
+                colors_ssim = colors * masks[..., None]
+                pixels_ssim = pixels * masks[..., None]
+            else:
+                l1loss = F.l1_loss(colors, pixels)
+                colors_ssim = colors
+                pixels_ssim = pixels
+            if _HAS_FUSED_SSIM:
+                ssimloss = 1.0 - fused_ssim(
+                    colors_ssim.permute(0, 3, 1, 2),
+                    pixels_ssim.permute(0, 3, 1, 2),
+                    padding="valid",
+                )
+            else:
+                # Slower fallback: use torchmetrics SSIM. ~2-3x slower per
+                # iteration, but lets training run on machines without the
+                # CUDA toolkit needed to compile fused-ssim.
+                ssimloss = 1.0 - self.ssim(
+                    colors_ssim.permute(0, 3, 1, 2),
+                    pixels_ssim.permute(0, 3, 1, 2),
+                )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
             if cfg.depth_loss:
                 # query depths from depth map
