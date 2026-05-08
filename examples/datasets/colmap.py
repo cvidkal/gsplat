@@ -19,12 +19,25 @@ from .normalize import (
 )
 
 
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+
+
 def _get_rel_paths(path_dir: str) -> List[str]:
-    """Recursively get relative paths of files in a directory."""
+    """Recursively get relative paths of *image* files in a directory.
+
+    Filters to known image extensions so unrelated sidecar files (e.g.
+    timestamp .txt logs left next to images) don't poison the file list.
+    Paths are normalized to forward slashes so they match COLMAP image
+    names on Windows (where os.path.relpath returns backslashes).
+    """
     paths = []
     for dp, dn, fn in os.walk(path_dir):
         for f in fn:
-            paths.append(os.path.relpath(os.path.join(dp, f), path_dir))
+            ext = os.path.splitext(f)[1].lower()
+            if ext not in _IMAGE_EXTS:
+                continue
+            rel = os.path.relpath(os.path.join(dp, f), path_dir)
+            paths.append(rel.replace(os.sep, "/"))
     return paths
 
 
