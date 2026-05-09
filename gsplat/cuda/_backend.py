@@ -174,7 +174,8 @@ except ImportError:
 
         extra_include_paths = [os.path.join(PATH, "include/"), glm_path]
         opt_level = "-O0" if FAST_COMPILE else "-O3"
-        extra_cflags = [opt_level, "-Wno-attributes"]
+        # MSVC (Windows) does not accept -Wno-attributes (GCC-only); cl.exe errors with D8021.
+        extra_cflags = [opt_level] + (["-Wno-attributes"] if os.name != "nt" else [])
         extra_cuda_cflags = [opt_level]
         if not NO_FAST_MATH:
             extra_cuda_cflags += ["-use_fast_math"]
